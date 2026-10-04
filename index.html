@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MAPimage</title>
+<style>
+:root{--bg:#f6f6f3;--fg:#1d1d1b;--card:#fff;--bd:#d8d8d2;--ac:#3b7d2c}
+@media(prefers-color-scheme:dark){:root{--bg:#161614;--fg:#eee;--card:#222220;--bd:#3a3a36;--ac:#6fbf55}}
+*{box-sizing:border-box}body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
+main{max-width:860px;margin:auto}h1{font-size:22px}h2{font-size:16px;margin:0 0 8px}
+section{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;margin:12px 0}
+label{display:inline-block;margin:4px 12px 4px 0}input[type=number]{width:64px}
+button{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:15px;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+canvas{max-width:100%;border:1px solid var(--bd);image-rendering:pixelated;touch-action:none}
+small,#st{color:gray}#st{display:block;margin-top:6px}
+</style></head><body><main>
+<h1>MAPimage</h1>
+<small><img src="victini.gif" alt="" style="height:1em;vertical-align:middle"> Clemouche :-)</small>
+
+<section><h2>Image</h2><input type="file" id="img" accept="image/*"></section>
+
+<section><h2>Map files</h2>
+<input type="file" id="dats" accept=".dat" multiple>
+<div><small>Select all the .dat files from <code>data/minecraft/maps</code> you want to overwrite they are sorted by number and fill the grid left to right top to bottom</small></div>
+<span id="fl"></span></section>
+
+<section><h2>Grid &amp; crop</h2>
+<label>Columns <input type="number" id="cols" min="1" value="1"></label>
+<label>Rows <input type="number" id="rows" min="1" value="1"></label>
+<label><input type="checkbox" id="colmaj"> fill column by column</label><br>
+<label>Crop size <input type="range" id="zoom" min="10" max="100" value="100"></label>
+<div><small>You can crop the image to your likings</small></div>
+<canvas id="src"></canvas></section>
+
+<section><h2>Colors</h2>
+<label>Mode <select id="mode">
+<option value="1">Flat 2D (1 shade per colour)</option>
+<option value="3" selected>Staircase 3D (3 shades)</option>
+<option value="4">All 4 shades</option></select></label>
+<label>Dithering <select id="dith"><option value="1">Floyd–Steinberg</option><option value="0">None</option></select></label><br>
+<button id="go" disabled>CONVERT PREVIEW</button>
+<div><canvas id="out"></canvas></div></section>
+
+<section><h2>Download</h2>
+<label><input type="checkbox" id="far" checked>move center x and z values to 2147483647 (your map will struggling if you dont)</label><br>
+<button id="dl" disabled>DOWNLOAD ZIP OF DAT FILES</button><span id="st"></span></section>
+</main>
+<script>
+// MAP PALETTE
+const BASE="0,0,0 127,178,56 247,233,163 199,199,199 255,0,0 160,160,255 167,167,167 0,124,0 255,255,255 164,168,184 151,109,77 112,112,112 64,64,255 143,119,72 255,252,245 216,127,51 178,76,216 102,153,216 229,229,51 127,204,25 242,127,165 76,76,76 153,153,153 76,127,153 127,63,178 51,76,178 102,76,51 102,127,51 153,51,51 25,25,25 250,238,77 92,219,213 74,128,255 0,217,58 129,86,49 112,2,0 209,177,161 159,82,36 149,87,108 112,108,138 186,133,36 103,117,53 160,77,78 57,41,35 135,107,98 87,92,92 122,73,88 76,62,92 76,50,35 76,82,42 142,60,46 37,22,16 189,48,49 148,63,97 92,25,29 22,126,134 58,142,140 86,44,62 20,180,133 100,100,100 216,175,147 127,167,150".split(" ").map(s=>s.split(",").map(Number));
+const SH=[180,220,255,135]; // SHADE index 0.3
+const $=id=>document.getElementById(id);
+let img=null,files=[],crop={x:0,y:0,w:1},result=null;
+
+function palette(){
+  const m=+$("mode").value, idx=m==1?[2]:m==3?[0,1,2]:[0,1,2,3], P=[];
+  for(let b=1;b<BASE.length;b++)for(const s of idx)
+    P.push({r:BASE[b][0]*SH[s]/255|0,g:BASE[b][1]*SH[s]/255|0,b:BASE[b][2]*SH[s]/255|0,id:b*4+s});
+  return P;
+}
+const gridN=()=>[Math.max(1,+$("cols").value|0),Math.max(1,+$("rows").value|0)];
+function maxW(){const[c,r]=gridN();return Math.min(img.width,img.height*c/r)}
+function fitCrop(keep){
+  if(!img)return;const[c,r]=gridN(),mw=maxW();
+  crop.w=mw*$("zoom").value/100;const h=crop.w*r/c;
+  if(!keep){crop.x=(img.width-crop.w)/2;crop.y=(img.height-h)/2}
+  crop.x=Math.min(Math.max(0,crop.x),img.width-crop.w);crop.y=Math.min(Math.max(0,crop.y),img.height-h);
+  drawSrc();
+}
+function drawSrc(){
+  const cv=$("src"),sc=Math.min(1,820/img.width);cv.width=img.width*sc;cv.height=img.height*sc;
+  const g=cv.getContext("2d");g.drawImage(img,0,0,cv.width,cv.height);
+  const[c,r]=gridN(),x=crop.x*sc,y=crop.y*sc,w=crop.w*sc,h=w*r/c;
+  g.fillStyle="rgba(0,0,0,.55)";g.fillRect(0,0,cv.width,y);g.fillRect(0,y+h,cv.width,cv.height-y-h);
+  g.fillRect(0,y,x,h);g.fillRect(x+w,y,cv.width-x-w,h);
+  g.strokeStyle="#fff";g.lineWidth=2;g.strokeRect(x,y,w,h);g.lineWidth=1;g.strokeStyle="rgba(255,255,255,.6)";
+  for(let i=1;i<c;i++){g.beginPath();g.moveTo(x+w*i/c,y);g.lineTo(x+w*i/c,y+h);g.stroke()}
+  for(let i=1;i<r;i++){g.beginPath();g.moveTo(x,y+h*i/r);g.lineTo(x+w,y+h*i/r);g.stroke()}
+}
+function autoGrid(){
+  const n=files.length;if(!n||!img)return;
+  let best=[n,1],bd=1e9;
+  for(let c=1;c<=n;c++)if(n%c==0){const d=Math.abs(Math.log(c/(n/c)/(img.width/img.height)));if(d<bd){bd=d;best=[c,n/c]}}
+  $("cols").value=best[0];$("rows").value=best[1];
+}
+$("img").onchange=e=>{
+  const f=e.target.files[0];if(!f)return;const im=new Image();
+  im.onload=()=>{img=im;autoGrid();$("zoom").value=100;fitCrop();check()};im.src=URL.createObjectURL(f);
+};
+$("dats").onchange=e=>{
+  files=[...e.target.files].sort((a,b)=>(parseInt(a.name.replace(/\D/g,""))||0)-(parseInt(b.name.replace(/\D/g,""))||0));
+  $("fl").textContent=files.length+" file(s): "+files.map(f=>f.name).join(", ");
+  autoGrid();if(img)fitCrop();check();
+};
+["cols","rows"].forEach(i=>$(i).oninput=()=>{if(img){$("zoom").value=100;fitCrop();}check()});
+$("zoom").oninput=()=>{if(img){const[c,r]=gridN(),cx=crop.x+crop.w/2,cy=crop.y+crop.w*r/c/2;fitCrop(true);
+  crop.x=cx-crop.w/2;crop.y=cy-crop.w*r/c/2;fitCrop(true)}};
+function check(){
+  const[c,r]=gridN(),ok=img&&files.length>=c*r;
+  $("go").disabled=!ok;$("dl").disabled=true;result=null;
+  $("st").textContent=!img||!files.length?"":ok?(files.length>c*r?`Using the first ${c*r} of ${files.length} files.`:""):`Grid needs ${c*r} files but you gave ${files.length}.`;
+}
+// drag
+let drag=null;const sv=$("src");
+sv.onpointerdown=e=>{drag={x:e.clientX,y:e.clientY,cx:crop.x,cy:crop.y};sv.setPointerCapture(e.pointerId)};
+sv.onpointermove=e=>{if(!drag)return;const k=img.width/sv.getBoundingClientRect().width;
+  crop.x=drag.cx+(e.clientX-drag.x)*k;crop.y=drag.cy+(e.clientY-drag.y)*k;fitCrop(true)};
+sv.onpointerup=()=>drag=null;
+
+// converte
+$("go").onclick=()=>{$("go").disabled=true;$("st").textContent="Converting…";setTimeout(()=>{convert();$("go").disabled=false},30)};
+function convert(){
+  const[c,r]=gridN(),W=c*128,H=r*128,P=palette(),n=P.length;
+  const t=document.createElement("canvas");t.width=W;t.height=H;const g=t.getContext("2d");
+  g.imageSmoothingQuality="high";g.drawImage(img,crop.x,crop.y,crop.w,crop.w*r/c,0,0,W,H);
+  const d=g.getImageData(0,0,W,H).data,buf=new Float32Array(W*H*3),al=new Uint8Array(W*H);
+  for(let i=0;i<W*H;i++){buf[i*3]=d[i*4];buf[i*3+1]=d[i*4+1];buf[i*3+2]=d[i*4+2];al[i]=d[i*4+3]}
+  const dith=$("dith").value=="1",out=new Uint8Array(W*H);
+  const pr=P.map(p=>p.r),pg=P.map(p=>p.g),pb=P.map(p=>p.b);
+  const add=(x,y,k,er,eg,eb)=>{if(x<0||x>=W||y>=H)return;const j=(y*W+x)*3;buf[j]+=er*k;buf[j+1]+=eg*k;buf[j+2]+=eb*k};
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const i=y*W+x;if(al[i]<128){out[i]=0;continue}
+    const R=Math.min(255,Math.max(0,buf[i*3])),G=Math.min(255,Math.max(0,buf[i*3+1])),B=Math.min(255,Math.max(0,buf[i*3+2]));
+    let bi=0,bd=1e12;
+    for(let k=0;k<n;k++){const rm=(R+pr[k])/2,dr=R-pr[k],dg=G-pg[k],db=B-pb[k];
+      const dd=(2+rm/256)*dr*dr+4*dg*dg+(2+(255-rm)/256)*db*db;if(dd<bd){bd=dd;bi=k}}
+    out[i]=P[bi].id;
+    if(dith){const er=R-pr[bi],eg=G-pg[bi],eb=B-pb[bi];
+      add(x+1,y,7/16,er,eg,eb);add(x-1,y+1,3/16,er,eg,eb);add(x,y+1,5/16,er,eg,eb);add(x+1,y+1,1/16,er,eg,eb)}
+  }
+  // preview
+  const o=$("out");o.width=W;o.height=H;const og=o.getContext("2d"),im=og.createImageData(W,H),lut={};
+  P.forEach(p=>lut[p.id]=p);
+  for(let i=0;i<W*H;i++){const p=lut[out[i]]||{r:0,g:0,b:0};im.data.set([p.r,p.g,p.b,out[i]?255:0],i*4)}
+  og.putImageData(im,0,0);
+  result={out,W,c,r};$("dl").disabled=false;$("st").textContent="Preview ready.";
+}
+
+// nbt patch et zip
+async function gz(buf,mode){
+  const s=new Blob([buf]).stream().pipeThrough(mode=="d"?new DecompressionStream("gzip"):new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+function setInt(raw,name,val){ // TAG_Int (3) avec nom donné et ça overwrite
+  const tag=[3,0,name.length,...[...name].map(ch=>ch.charCodeAt(0))];
+  outer:for(let i=0;i<raw.length-tag.length-4;i++){
+    for(let j=0;j<tag.length;j++)if(raw[i+j]!==tag[j])continue outer;
+    new DataView(raw.buffer,raw.byteOffset+i+tag.length,4).setInt32(0,val);return true;
+  }
+  return false;
+}
+function patch(raw,colors){
+  if($("far").checked){setInt(raw,"xCenter",2147483647);setInt(raw,"zCenter",2147483647)}
+  const tag=[7,0,6,99,111,108,111,114,115]; // TAG_Byte_Array "colors"
+  outer:for(let i=0;i<raw.length-13;i++){
+    for(let j=0;j<tag.length;j++)if(raw[i+j]!==tag[j])continue outer;
+    const len=new DataView(raw.buffer,raw.byteOffset+i+9,4).getInt32(0);
+    if(len!==16384)throw Error("unexpected colors length "+len);
+    raw.set(colors,i+13);return raw;
+  }
+  throw Error("no 'colors' array found");
+}
+const CT=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
+const crc=b=>{let c=~0;for(let i=0;i<b.length;i++)c=CT[(c^b[i])&255]^(c>>>8);return ~c>>>0};
+function zip(items){ // store only zip
+  const enc=new TextEncoder(),parts=[],cen=[];let off=0;
+  for(const{name,data}of items){
+    const nm=enc.encode(name),cr=crc(data),h=new DataView(new ArrayBuffer(30));
+    h.setUint32(0,0x04034b50,true);h.setUint16(4,20,true);h.setUint16(10,0,true);h.setUint16(12,0x21,true);
+    h.setUint32(14,cr,true);h.setUint32(18,data.length,true);h.setUint32(22,data.length,true);h.setUint16(26,nm.length,true);
+    parts.push(h.buffer,nm,data);
+    const c=new DataView(new ArrayBuffer(46));
+    c.setUint32(0,0x02014b50,true);c.setUint16(4,20,true);c.setUint16(6,20,true);c.setUint16(14,0x21,true);
+    c.setUint32(16,cr,true);c.setUint32(20,data.length,true);c.setUint32(24,data.length,true);c.setUint16(28,nm.length,true);c.setUint32(42,off,true);
+    cen.push(c.buffer,nm);off+=30+nm.length+data.length;
+  }
+  const csz=cen.reduce((a,b)=>a+b.byteLength,0),e=new DataView(new ArrayBuffer(22));
+  e.setUint32(0,0x06054b50,true);e.setUint16(8,items.length,true);e.setUint16(10,items.length,true);e.setUint32(12,csz,true);e.setUint32(16,off,true);
+  return new Blob([...parts,...cen,e.buffer],{type:"application/zip"});
+}
+$("dl").onclick=async()=>{
+  try{
+    const{out,W,c,r}=result,items=[];$("st").textContent="Building files…";
+    for(let k=0;k<c*r;k++){
+      const tr=$("colmaj").checked?k%r:Math.floor(k/c),tc=$("colmaj").checked?Math.floor(k/r):k%c;
+      const colors=new Uint8Array(16384);
+      for(let z=0;z<128;z++)for(let x=0;x<128;x++)colors[z*128+x]=out[(tr*128+z)*W+tc*128+x];
+      const raw=await gz(await files[k].arrayBuffer(),"d");
+      items.push({name:files[k].name,data:await gz(patch(raw,colors),"c")});
+    }
+    const a=document.createElement("a");a.href=URL.createObjectURL(zip(items));const timestamp = Math.floor(Date.now() / 1000);const imageName=$("img").files[0].name.replace(/\.[^/.]+$/,"");a.download=`${timestamp}-${imageName}`;a.click();
+    $("st").textContent="Done copy the .dat files into data/minecraft/maps";
+  }catch(err){$("st").textContent="Error: "+err.message}
+};
+</script></body></html>
