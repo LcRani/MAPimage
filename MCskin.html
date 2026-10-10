@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MCskin</title>
+<style>
+:root{--bg:#f3f4f0;--panel:#fff;--text:#1d201c;--mut:#666b63;--bd:#d8dbd3;--acc:#3f8f3a;--accT:#fff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#181a17;--panel:#22251f;--text:#e8eae4;--mut:#9aa094;--bd:#363a32;--acc:#5fb558;--accT:#10210e}}
+:root[data-theme="dark"]{--bg:#181a17;--panel:#22251f;--text:#e8eae4;--mut:#9aa094;--bd:#363a32;--acc:#5fb558;--accT:#10210e}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--bd);background:var(--panel)}
+h1{font-size:16px;margin:0;margin-right:auto}
+button,label.btn{font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--bd);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover,label.btn:hover{border-color:var(--acc)}
+button.pri,label.pri{background:var(--acc);color:var(--accT);border-color:var(--acc);font-weight:600}
+button.on{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+button:disabled{opacity:.45;cursor:default}
+main{flex:1;min-height:0;display:flex}
+#view{flex:1;min-width:0;position:relative;touch-action:none;cursor:grab}
+#view:active{cursor:grabbing}
+#view canvas{display:block;width:100%;height:100%}
+#empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--mut);padding:24px;pointer-events:none}
+#empty b{color:var(--text);font-size:16px;margin-bottom:6px}
+#bar{position:absolute;left:0;right:0;bottom:10px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;padding:0 10px}
+#cur{position:absolute;top:10px;left:14px;font-weight:600}
+aside{width:300px;border-left:1px solid var(--bd);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+aside h2{font-size:13px;margin:0;padding:10px 12px;color:var(--mut);border-bottom:1px solid var(--bd)}
+#grid{flex:1;overflow-y:auto;padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;align-content:start}
+.card{border:1px solid var(--bd);border-radius:8px;padding:8px;background:var(--bg);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
+.card.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.card canvas{width:64px;height:64px;image-rendering:pixelated}
+.card span{font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card button{font-size:12px;padding:3px 8px;width:100%}
+#msg{padding:8px 12px;color:var(--mut);font-size:12px;border-top:1px solid var(--bd);min-height:1em}
+#drop{position:fixed;inset:0;background:color-mix(in srgb,var(--acc) 25%,transparent);border:3px dashed var(--acc);display:none;align-items:center;justify-content:center;font-size:20px;font-weight:700;z-index:9;pointer-events:none}
+@media (max-width:720px){main{flex-direction:column}aside{width:auto;height:38%;border-left:0;border-top:1px solid var(--bd)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>MCskin</h1>
+  <label class="btn pri">Open .mcpack / .png<input id="file" type="file" accept=".mcpack,.zip,.mcaddon,.png,image/png" multiple hidden></label>
+</header>
+<main>
+  <div id="view">
+    <div id="cur"></div>
+    <div id="empty"><b>Drop a skin here</b>Load a .png skin or a whole .mcpack skin pack<br>Drag to rotate · scroll to zoom</div>
+    <div id="bar">
+      <button id="bClassic" class="on">Classic arms</button>
+      <button id="bSlim">Slim arms</button>
+      <button id="bOverlay" class="on">Outer layer</button>
+      <button id="bAuto" class="on">Auto-rotate</button>
+      <button id="bDl" class="pri" disabled>Download PNG</button>
+    </div>
+  </div>
+  <aside>
+    <h2 id="packName">Skins</h2>
+    <div id="grid"></div>
+    <div id="msg"></div>
+  </aside>
+</main>
+<div id="drop">Drop to load</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let skins = [], cur = null, showOverlay = true, auto = true, downloads = null;
+try { claude.use("downloads").then(d => { downloads = d; }).catch(()=>{}); } catch (e) {}
+const view = $('#view');
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+view.insertBefore(renderer.domElement, view.firstChild);
+const scene = new THREE.Scene();
+const cam = new THREE.PerspectiveCamera(35, 1, 1, 500);
+const pivot = new THREE.Group(), model = new THREE.Group();
+model.position.y = -16; pivot.add(model); scene.add(pivot);
+let rotY = -0.6, rotX = 0.15, dist = 95, dragging = false, lx = 0, ly = 0;
+let overlays = [];
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+  renderer.setSize(w, h, false);
+  cam.aspect = w / h; cam.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view); resize();
+view.addEventListener('pointerdown', e => { dragging = true; lx = e.clientX; ly = e.clientY; view.setPointerCapture(e.pointerId); });
+view.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  rotY += (e.clientX - lx) * 0.01;
+  rotX = Math.max(-1.2, Math.min(1.2, rotX + (e.clientY - ly) * 0.01));
+  lx = e.clientX; ly = e.clientY;
+});
+view.addEventListener('pointerup', () => dragging = false);
+view.addEventListener('pointercancel', () => dragging = false);
+view.addEventListener('wheel', e => { e.preventDefault(); dist = Math.max(40, Math.min(220, dist * (1 + e.deltaY * 0.001))); }, {passive:false});
+(function loop() {
+  requestAnimationFrame(loop);
+  if (auto && !dragging) rotY += 0.008;
+  pivot.rotation.set(rotX, rotY, 0);
+  cam.position.set(0, 0, dist);
+  renderer.render(scene, cam);
+})();
+function boxGeo(w, h, d, u, v, grow, H, mirror) {
+  const g = new THREE.BoxGeometry(w + grow*2, h + grow*2, d + grow*2);
+  const uv = g.attributes.uv;
+  const f = [[u+d+w, v+d, d, h], [u, v+d, d, h], [u+d, v, w, d], [u+d+w, v, w, d], [u+d, v+d, w, h], [u+2*d+w, v+d, w, h]];
+  if (mirror) [f[0], f[1]] = [f[1], f[0]];
+  f.forEach((r, i) => {
+    let u0 = r[0]/64, u1 = (r[0]+r[2])/64;
+    if (mirror) [u0, u1] = [u1, u0];
+    const v0 = 1 - r[1]/H, v1 = 1 - (r[1]+r[3])/H;
+    uv.setXY(i*4, u0, v0); uv.setXY(i*4+1, u1, v0); uv.setXY(i*4+2, u0, v1); uv.setXY(i*4+3, u1, v1);
+  });
+  return g;
+}
+function buildModel(skin) {
+  while (model.children.length) model.remove(model.children[0]);
+  overlays = [];
+  const img = skin.img, legacy = img.width !== img.height, H = legacy ? 32 : 64;
+  const tex = new THREE.Texture(img);
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestFilter; tex.needsUpdate = true;
+  const mat = new THREE.MeshBasicMaterial({map: tex, transparent: true, alphaTest: 0.5});
+  const aw = skin.slim ? 3 : 4;
+  // [w,h,d, u,v, overlay u,v, x,y, mirror]
+  const parts = [
+    [8,8,8, 0,0, 32,0, 0,28, false],
+    [8,12,4, 16,16, 16,32, 0,18, false],
+    [aw,12,4, 40,16, 40,32, -(4+aw/2),18, false],
+    [aw,12,4, legacy?40:32, legacy?16:48, 48,48, 4+aw/2,18, legacy],
+    [4,12,4, 0,16, 0,32, -2,6, false],
+    [4,12,4, legacy?0:16, legacy?16:48, 0,48, 2,6, legacy]
+  ];
+  parts.forEach((p, i) => {
+    const [w,h,d,u,v,ou,ov,x,y,m] = p;
+    const base = new THREE.Mesh(boxGeo(w,h,d,u,v,0,H,m), mat);
+    base.position.set(x, y, 0); model.add(base);
+    if (!legacy || i === 0) {
+      const o = new THREE.Mesh(boxGeo(w,h,d,ou,ov,i===0?0.5:0.25,H,false), mat);
+      o.position.set(x, y, 0); o.visible = showOverlay; model.add(o); overlays.push(o);
+    }
+  });
+}
+function detectSlim(img) {
+  if (img.width !== img.height) return false;
+  const s = img.width / 64, c = document.createElement('canvas');
+  c.width = c.height = 1;
+  const x = c.getContext('2d');
+  x.drawImage(img, 55*s, 25*s, 1, 1, 0, 0, 1, 1);
+  return x.getImageData(0, 0, 1, 1).data[3] === 0;
+}
+async function addSkin(name, blob, slimHint) {
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  try { img.src = url; await img.decode(); } catch (e) { URL.revokeObjectURL(url); return null; }
+  const skin = {name, blob, url, img, slim: slimHint ?? detectSlim(img)};
+  skins.push(skin); return skin;
+}
+function thumb(skin) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d'); x.imageSmoothingEnabled = false;
+  const s = skin.img.width / 64;
+  x.drawImage(skin.img, 8*s, 8*s, 8*s, 8*s, 0, 0, 64, 64);
+  x.drawImage(skin.img, 40*s, 8*s, 8*s, 8*s, 0, 0, 64, 64);
+  return c;
+}
+function renderGrid() {
+  const g = $('#grid'); g.innerHTML = '';
+  skins.forEach(sk => {
+    const el = document.createElement('div');
+    el.className = 'card' + (sk === cur ? ' sel' : '');
+    const nm = document.createElement('span'); nm.textContent = sk.name; nm.title = sk.name;
+    const b = document.createElement('button'); b.textContent = '⬇ PNG';
+    b.onclick = e => { e.stopPropagation(); download(sk); };
+    el.append(thumb(sk), nm, b);
+    el.onclick = () => select(sk);
+    g.appendChild(el);
+  });
+  $('#empty').style.display = skins.length ? 'none' : 'flex';
+}
+function select(sk) {
+  cur = sk; buildModel(sk);
+  $('#cur').textContent = sk.name;
+  $('#bDl').disabled = false;
+  $('#bClassic').classList.toggle('on', !sk.slim);
+  $('#bSlim').classList.toggle('on', sk.slim);
+  [...$('#grid').children].forEach((el, i) => el.classList.toggle('sel', skins[i] === sk));
+}
+async function download(sk) {
+  const filename = sk.name.replace(/[\\/:*?"<>|]+/g, '_') + '.png';
+  if (downloads) {
+    try { await downloads.save({filename, data: sk.blob}); msg('Saved ' + filename); }
+    catch (e) { if (e.code !== 'declined') msg('Download failed: ' + (e.message || e.code)); }
+  } else {
+    const a = document.createElement('a'); a.href = sk.url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+}
+const msg = t => $('#msg').textContent = t;
+function parseLang(text) {
+  const map = {};
+  text.split(/\r?\n/).forEach(l => {
+    if (!l.trim() || l.startsWith('#')) return;
+    const i = l.indexOf('='); if (i < 0) return;
+    map[l.slice(0, i).trim()] = l.slice(i + 1).split('\t#')[0].trim();
+  });
+  return map;
+}
+async function loadPack(file) {
+  const zip = await JSZip.loadAsync(file);
+  const names = Object.keys(zip.files);
+  const sj = names.find(n => /(^|\/)skins\.json$/i.test(n));
+  const png = async entry => new Blob([await entry.async('arraybuffer')], {type: 'image/png'});
+  const out = [];
+  if (!sj) {
+    for (const n of names.filter(n => /\.png$/i.test(n) && !/pack_icon/i.test(n)))
+      out.push(await addSkin(n.split('/').pop().replace(/\.png$/i, ''), await png(zip.files[n])));
+    return out;
+  }
+  const base = sj.slice(0, sj.length - 'skins.json'.length);
+  const raw = (await zip.file(sj).async('string')).replace(/^\uFEFF/, '').replace(/^\s*\/\/.*$/gm, '');
+  const json = JSON.parse(raw);
+  let lang = {};
+  const lf = names.find(n => /texts\/en_US\.lang$/i.test(n)) || names.find(n => /\.lang$/i.test(n));
+  if (lf) lang = parseLang(await zip.file(lf).async('string'));
+  let packTitle = Object.entries(lang).find(([k]) => /^skinpack\./i.test(k));
+  if (json.localization_name || packTitle) $('#packName').textContent = (packTitle ? packTitle[1] : json.localization_name) + ' · ' + file.name;
+  for (const s of json.skins || []) {
+    const entry = zip.file(base + s.texture) || zip.file(s.texture);
+    if (!entry) continue;
+    const key = Object.keys(lang).find(k => k.endsWith('.' + s.localization_name));
+    const geo = (s.geometry || '').toLowerCase();
+    const hint = geo.includes('slim') ? true : (geo.includes('custom') ? false : undefined);
+    out.push(await addSkin(lang[key] || s.localization_name || s.texture, await png(entry), hint));
+  }
+  return out;
+}
+async function handleFiles(files) {
+  const list = [...files]; if (!list.length) return;
+  msg('Loading…');
+  let first = null, firstNew = skins.length;
+  try {
+    for (const f of list) {
+      if (/\.png$/i.test(f.name) || f.type === 'image/png') {
+        const s = await addSkin(f.name.replace(/\.png$/i, ''), f); first = first || s;
+      } else {
+        if (!first) { skins.forEach(s => URL.revokeObjectURL(s.url)); skins = []; cur = null; firstNew = 0; }
+        $('#packName').textContent = f.name;
+        const r = await loadPack(f); first = first || r.find(Boolean);
+      }
+    }
+    skins = skins.filter(Boolean);
+    renderGrid();
+    if (skins[firstNew]) select(skins[firstNew]);
+    msg(skins.length + ' skin' + (skins.length === 1 ? '' : 's') + ' loaded');
+  } catch (e) { renderGrid(); msg('Could not read file: ' + e.message); }
+}
+$('#file').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
+$('#bClassic').onclick = () => { if (cur) { cur.slim = false; select(cur); } };
+$('#bSlim').onclick = () => { if (cur) { cur.slim = true; select(cur); } };
+$('#bOverlay').onclick = e => { showOverlay = !showOverlay; e.target.classList.toggle('on', showOverlay); overlays.forEach(o => o.visible = showOverlay); };
+$('#bAuto').onclick = e => { auto = !auto; e.target.classList.toggle('on', auto); };
+$('#bDl').onclick = () => cur && download(cur);
+let dc = 0;
+addEventListener('dragenter', e => { e.preventDefault(); dc++; $('#drop').style.display = 'flex'; });
+addEventListener('dragleave', () => { if (--dc <= 0) { dc = 0; $('#drop').style.display = 'none'; } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); dc = 0; $('#drop').style.display = 'none'; handleFiles(e.dataTransfer.files); });
+</script>
+</body>
+</html>
